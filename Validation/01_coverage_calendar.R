@@ -111,15 +111,19 @@ calendar <- expand.grid(year  = YEAR_START:YEAR_END,
 # Overwrite the status of flagged months, but only where data actually exists:
 # a month that is empty anyway should stay labelled "No data" rather than being
 # promoted to a quality warning.
-calendar <- calendar |>
-  dplyr::left_join(
-    dplyr::transmute(LOW_QUALITY_MONTHS, year, month, flagged = TRUE),
-    by = c("year", "month")
-  ) |>
-  dplyr::mutate(
-    status = ifelse(!is.na(flagged) & status != "No data",
-                    "Flagged: low quality", status)
-  )
+# The join is skipped entirely when no months are flagged, which is the default
+# state of a fresh checkout.
+if (nrow(LOW_QUALITY_MONTHS) > 0) {
+  calendar <- calendar |>
+    dplyr::left_join(
+      dplyr::transmute(LOW_QUALITY_MONTHS, year, month, flagged = TRUE),
+      by = c("year", "month")
+    ) |>
+    dplyr::mutate(
+      status = ifelse(!is.na(flagged) & status != "No data",
+                      "Flagged: low quality", status)
+    )
+}
 
 
 # -----------------------------------------------------------------------------
@@ -175,25 +179,29 @@ annual <- calendar |>
     months_empty    = sum(!has_ndvi & !has_lst),
     months_flagged  = sum(status == "Flagged: low quality"),
     .groups = "drop"
-  ) |>
-  # A year whose available months are all clustered in one season yields a
-  # biased annual mean even when the month count looks adequate, so the
-  # seasonal spread is reported alongside the count.
-  dplyr::left_join(
-    calendar |>
-      dplyr::filter(has_ndvi | has_lst) |>
-      dplyr::mutate(season = dplyr::case_when(
-        month %in% c(12, 1, 2)  ~ "Summer",
-        month %in% c(3, 4, 5)   ~ "Autumn",
-        month %in% c(6, 7, 8)   ~ "Winter",
-        month %in% c(9, 10, 11) ~ "Spring")) |>
-      dplyr::group_by(year) |>
-      dplyr::summarise(seasons_represented = dplyr::n_distinct(season),
-                       .groups = "drop"),
-    by = "year"
-  ) |>
-  dplyr::mutate(seasons_represented = ifelse(is.na(seasons_represented), 0L,
-                                             seasons_represented))
+  )
+
+# A year whose available months are all clustered in one season yields a biased
+# annual mean even when the month count looks adequate, so the seasonal spread
+# is reported alongside the count. Season labels follow HEMISPHERE
+# (00_common.R, section 1e); when that is NA the column is omitted rather than
+# fabricated, since a four-season scheme does not describe every climate.
+SEASONS_ENABLED <- length(season_levels()) > 0
+
+if (SEASONS_ENABLED) {
+  annual <- annual |>
+    dplyr::left_join(
+      calendar |>
+        dplyr::filter(has_ndvi | has_lst) |>
+        dplyr::mutate(season = .season_of(month)) |>
+        dplyr::group_by(year) |>
+        dplyr::summarise(seasons_represented = dplyr::n_distinct(season),
+                         .groups = "drop"),
+      by = "year"
+    ) |>
+    dplyr::mutate(seasons_represented = ifelse(is.na(seasons_represented), 0L,
+                                               seasons_represented))
+}
 
 
 # -----------------------------------------------------------------------------
@@ -233,11 +241,14 @@ cat(sprintf("  Cells with no data at all     : %d\n",
 cat("\n")
 
 cat("--- BY YEAR ---\n")
-cat("  months_complete    = both NDVI and LST present\n")
-cat("  seasons_represented= how many of the four seasons contribute; a year\n")
-cat("                       with data in only one or two seasons yields a\n")
-cat("                       seasonally biased annual mean regardless of how\n")
-cat("                       many months it has.\n\n")
+cat("  months_complete     = both NDVI and LST present\n")
+if (SEASONS_ENABLED) {
+  cat("  seasons_represented = how many of the four seasons contribute; a year\n")
+  cat("                        with data in only one or two seasons yields a\n")
+  cat("                        seasonally biased annual mean regardless of how\n")
+  cat("                        many months it has.\n")
+}
+cat("\n")
 print(as.data.frame(annual), row.names = FALSE)
 cat("\n")
 
@@ -291,9 +302,7 @@ if (!is.null(zone_cover)) {
 }
 
 cat("--- FLAGGED MONTHS ---\n")
-for (i in seq_len(nrow(LOW_QUALITY_MONTHS)))
-  cat(sprintf("  %d-%02d : %s\n", LOW_QUALITY_MONTHS$year[i],
-              LOW_QUALITY_MONTHS$month[i], LOW_QUALITY_MONTHS$reason[i]))
+cat(excluded_months_report())
 cat("\n")
 cat(strrep("=", 78), "\n")
 
@@ -451,7 +460,10 @@ p3 <- ggplot(annual_long, aes(x = factor(year), y = n_months, fill = category)) 
     title    = sprintf("Annual data availability, %s", AOI_LABEL),
     subtitle = "Composition of each year's twelve months. Annual means from years below the dashed line should be read with caution.",
     x = NULL, y = "Number of months",
-    caption = "Seasonal balance matters as much as the count: see coverage_summary_annual.csv for the number of seasons represented in each year."
+    caption = if (SEASONS_ENABLED)
+      "Seasonal balance matters as much as the count: see coverage_summary_annual.csv for the number of seasons represented in each year."
+    else
+      "See coverage_summary_annual.csv for the month-by-month breakdown."
   ) +
   theme_pub(grid = "y") +
   theme(legend.position = "bottom",
