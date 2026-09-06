@@ -594,17 +594,16 @@ R package. https://CRAN.R-project.org/package=terra
 
 ---
 
-## 17. Citation and licence
+## 17. Citation 
 
-If this pipeline supports a publication, cite the Landsat datasets by DOI (see
+Cite the Landsat datasets by DOI (see
 `docs/references.bib`), the ST algorithm [[6]](#ref6), the cloud mask
-[[11]](#ref11), and this repository.
+[[11]](#ref11), and this repository (along with the published paper).
 
 Landsat data are courtesy of the U.S. Geological Survey and are in the public
 domain. Acknowledge them per the
 [USGS data citation policy](https://www.usgs.gov/centers/eros/data-citation).
 
-Code released under the MIT Licence — see `LICENSE`.
 
 ---
 
