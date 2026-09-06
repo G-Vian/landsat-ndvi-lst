@@ -18,27 +18,134 @@ Adapting it to a new study area means editing **one file**.
 
 ## Table of contents
 
-1. [Why this pipeline](#1-why-this-pipeline)
-2. [Requirements](#2-requirements)
-3. [Quick start](#3-quick-start)
-4. [Verifying the installation](#4-verifying-the-installation)
-5. [Input data layout](#5-input-data-layout)
-6. [Configuration reference](#6-configuration-reference)
-7. [Adapting to a new study area](#7-adapting-to-a-new-study-area)
-8. [Module reference](#8-module-reference)
-9. [Outputs](#9-outputs)
-10. [Output column dictionary](#10-output-column-dictionary)
-11. [Methods](#11-methods)
-12. [Quality control cascade](#12-quality-control-cascade)
-13. [Running on an HPC cluster](#13-running-on-an-hpc-cluster)
-14. [Troubleshooting](#14-troubleshooting)
-15. [Known limitations](#15-known-limitations)
-16. [References](#16-references)
-17. [Citation and licence](#17-citation-and-licence)
+1. [Can I use this on my own area?](#1-can-i-use-this-on-my-own-area)
+2. [Why this pipeline](#2-why-this-pipeline)
+3. [Requirements](#3-requirements)
+4. [Quick start](#4-quick-start)
+5. [Verifying the installation](#5-verifying-the-installation)
+6. [Input data layout](#6-input-data-layout)
+7. [Configuration reference](#7-configuration-reference)
+8. [Adapting to a new study area](#8-adapting-to-a-new-study-area)
+9. [Module reference](#9-module-reference)
+10. [Outputs](#10-outputs)
+11. [Output column dictionary](#11-output-column-dictionary)
+12. [Methods](#12-methods)
+13. [Quality control cascade](#13-quality-control-cascade)
+14. [Running on an HPC cluster](#14-running-on-an-hpc-cluster)
+15. [Troubleshooting](#15-troubleshooting)
+16. [Known limitations](#16-known-limitations)
+17. [References](#17-references)
+18. [Citation and licence](#18-citation-and-licence)
 
 ---
 
-## 1. Why this pipeline
+## 1. Can I use this on my own area?
+
+**Yes.** Nothing in the code is specific to the area it was first written for.
+The automated self-test builds a synthetic study area from scratch and runs the
+whole pipeline over it, so "works anywhere" is verified rather than claimed.
+
+### What you provide
+
+| | Requirement |
+|---|---|
+| **A polygon file** | `.shp`, `.gpkg` or `.geojson`. Must have a **defined CRS**, **non-overlapping** polygons, and a column holding the zone names. |
+| **Landsat scenes** | Collection 2 **Level-2** products from [EarthExplorer](https://earthexplorer.usgs.gov/), each unpacked into its own folder, with the red, NIR, thermal and `QA_PIXEL` bands plus the `MTL` file. |
+| **Five edits** | In `R/00_config.R` only. Listed below. |
+
+### The five settings you must set
+
+```r
+# 1. Paths and identity
+AOI_NAME <- "MyCity";  BASE_DIR <- "..."
+DIRS_LANDSAT <- list(all = file.path(BASE_DIR, "landsat"))
+SHP_FILE <- file.path(BASE_DIR, "shp/zones.gpkg")
+ZONE_NAME_COLUMN <- "district_name"       # set it explicitly
+
+# 2. Period
+YEAR_START <- 2015;  YEAR_END <- 2024
+
+# 3. Projection - MUST be projected (metres), not degrees
+CRS_TARGET <- "EPSG:32723"
+
+# 4. Physical LST bounds - CLIMATE-DEPENDENT   <-- silent trap
+# Shipped defaults are deliberately WIDE (-20, 75) so that a first run on an
+# unknown climate discards nothing. Narrow them to your region afterwards.
+LST_MIN <- -20.0;  LST_MAX <- 75.0
+
+# 5. Scene/AOI overlap - SIZE-DEPENDENT        <-- silent trap
+MIN_AOI_OVERLAP_FRAC <- 0.10
+```
+
+### ⚠ Two settings fail *silently* if you leave the defaults
+
+These do not raise an error. They produce a wrong or empty result that looks
+plausible. They are the reason this section exists.
+
+**`LST_MIN` / `LST_MAX` — wrong bounds truncate your series without warning.**
+The shipped defaults (`-20`, `75`) are wide on purpose: they let a first run
+complete anywhere without silently discarding data. They are *not* the right
+final values. Set them too narrow and the failure is invisible — a floor of
+`5 °C` in a temperate region discards *every genuine winter observation*, and
+you get a series that looks fine while systematically missing its cold half.
+Set them too wide and artefacts survive into the statistics.
+
+| Climate | `LST_MIN` | `LST_MAX` |
+|---|---|---|
+| Tropical / subtropical coastal | 5 | 70 |
+| Tropical inland / semi-arid | 5 | 75 |
+| Temperate (with frost) | −15 | 60 |
+| Boreal / high latitude | −45 | 45 |
+| Desert | 0 | 80 |
+
+*How to check:* after the first run, open `tables/anomalies/`. Pixels piling up
+*at* a bound mean the bound is cutting into real data. Module 09 also warns at
+runtime if more than half the scenes hit a limit.
+
+**`MIN_AOI_OVERLAP_FRAC` — too high for a large area rejects every scene.**
+One Landsat scene covers ~185 × 180 km. For a city it covers 100% of your area
+and the default works. For a state, each scene covers a slice, so a 10%
+threshold rejects *all* of them and the run ends with nothing.
+
+| Your area vs one scene | Value |
+|---|---|
+| Smaller (city, park, watershed) | `0.10` |
+| A few scenes (metro region, small state) | `0.01` |
+| Many scenes (large state, country) | `0.0001` or `0` |
+
+*Symptom:* the log repeats "no sufficient overlap" for every scene.
+
+### What this pipeline is and is not suited to
+
+| Scale | Status |
+|---|---|
+| City, municipality, watershed, park | **Ideal.** Defaults work; per-pixel tables tractable. |
+| Metro region, small state | **Fine** with the overlap threshold lowered. |
+| Large state, province, country | **Works**, but set `COMPUTE_PIXEL_TABLES <- FALSE`, use an equal-area CRS, and expect seams (below). |
+
+**It does not build a mosaic.** Scenes are processed independently and
+aggregated statistically. That is *correct* for zonal statistics — each zone
+gets a pixel-count weighted mean of whichever scenes cover it. But the
+per-pixel maps of an area spanning several scenes can show scene-boundary
+seams. If a seamless composite image is your deliverable, this is the wrong
+tool.
+
+### Before you trust any result
+
+```bash
+Rscript tests/run_tests.R     # 33 checks, no real data needed, ~1 minute
+```
+
+Then do a **two-year test run** before committing to the full period.
+Configuration mistakes surface in minutes instead of hours.
+
+Full walkthrough, with a checklist: [`docs/ADAPTING_TO_NEW_AREA.md`](docs/ADAPTING_TO_NEW_AREA.md).
+Three ready-made profiles: [`config_examples/`](config_examples/) — coastal
+city, temperate city with frost, and state-scale region.
+
+---
+
+## 2. Why this pipeline
 
 Three things distinguish it from the many scripts that compute NDVI from
 Landsat:
@@ -64,7 +171,7 @@ any real data.
 
 ---
 
-## 2. Requirements
+## 3. Requirements
 
 **R ≥ 4.1** (the native pipe `|>` is used throughout). Tested on R 4.3.3.
 
@@ -91,11 +198,11 @@ sudo apt install libgdal-dev libproj-dev libgeos-dev libudunits2-dev
 
 **Hardware.** A city-sized AOI over 15 years (~200 scenes) runs in 1–3 hours on
 a laptop with 8 GB RAM. Requirements scale roughly linearly with scene count;
-see [§7](#7-adapting-to-a-new-study-area) for large-region guidance.
+see [§8](#8-adapting-to-a-new-study-area) for large-region guidance.
 
 ---
 
-## 3. Quick start
+## 4. Quick start
 
 ```bash
 git clone <your-repo-url> landsat-c2-zonal
@@ -116,7 +223,7 @@ Rscript R/06_main.R
 
 ---
 
-## 4. Verifying the installation
+## 5. Verifying the installation
 
 ```bash
 Rscript tests/run_tests.R
@@ -148,7 +255,7 @@ Run it again after upgrading R, `terra` or `sf`, and after editing any module.
 
 ---
 
-## 5. Input data layout
+## 6. Input data layout
 
 ### Landsat scenes
 
@@ -206,7 +313,7 @@ limit, no encoding surprises with accented names.
 
 ---
 
-## 6. Configuration reference
+## 7. Configuration reference
 
 Everything lives in `R/00_config.R`. Blocks you may want to change are marked
 `### EDIT ###`; everything below the "DO NOT EDIT" line is USGS specification
@@ -233,7 +340,7 @@ Three ready-made profiles are in `config_examples/`.
 
 ---
 
-## 7. Adapting to a new study area
+## 8. Adapting to a new study area
 
 Full walkthrough in [`docs/ADAPTING_TO_NEW_AREA.md`](docs/ADAPTING_TO_NEW_AREA.md).
 The five settings that actually matter:
@@ -286,7 +393,7 @@ area, and are always safe.
 
 ---
 
-## 8. Module reference
+## 9. Module reference
 
 | Module | Role |
 |---|---|
@@ -306,7 +413,7 @@ area, and are always safe.
 
 ---
 
-## 9. Outputs
+## 10. Outputs
 
 ```
 results_landsat/
@@ -331,7 +438,7 @@ and a provenance caption (`Landsat Collection 2 Level-2 (USGS) | CRS | date`).
 
 ---
 
-## 10. Output column dictionary
+## 11. Output column dictionary
 
 Statistics tables keep Portuguese column names (`ano`, `mes`, `data_aq`) for
 compatibility with existing downstream analyses.
@@ -358,7 +465,7 @@ as a rough heterogeneity indicator only.
 
 ---
 
-## 11. Methods
+## 12. Methods
 
 A ready-to-use Methods section for a manuscript, with citations, is in
 [`docs/methods_section.tex`](docs/methods_section.tex) (BibTeX in
@@ -443,7 +550,7 @@ in a subset of scenes would be biased downward.
 
 ---
 
-## 12. Quality control cascade
+## 13. Quality control cascade
 
 Seven filters, in order, all configurable in `00_config.R` §8:
 
@@ -463,7 +570,7 @@ Everything discarded is recorded by module 09.
 
 ---
 
-## 13. Running on an HPC cluster
+## 14. Running on an HPC cluster
 
 Set `R_LIBS_USER` in both `00_config.R` and `00_install_packages.R`, then
 install once from a node with internet:
@@ -481,7 +588,7 @@ from anywhere; lower `TERRA_MEMFRAC` (e.g. `0.4`) on shared nodes; disable
 
 ---
 
-## 14. Troubleshooting
+## 15. Troubleshooting
 
 | Symptom | Cause | Fix |
 |---|---|---|
@@ -507,7 +614,7 @@ breakdown, and whether your configured bounds are binding.
 
 ---
 
-## 15. Known limitations
+## 16. Known limitations
 
 - **No mosaicking.** Scenes are processed independently and aggregated
   statistically. Correct for zonal statistics, but per-pixel maps of a
@@ -532,7 +639,7 @@ breakdown, and whether your configured bounds are binding.
 
 ---
 
-## 16. References
+## 17. References
 
 <a name="ref1"></a>**[1]** U.S. Geological Survey. *How do I use a scale factor
 with Landsat Level-2 science products?*
@@ -594,17 +701,17 @@ R package. https://CRAN.R-project.org/package=terra
 
 ---
 
-## 17. Citation 
+## 18. Citation and  
 
-Cite the Landsat datasets by DOI (see
+If this pipeline supports a publication, cite the Landsat datasets by DOI (see
 `docs/references.bib`), the ST algorithm [[6]](#ref6), the cloud mask
-[[11]](#ref11), and this repository (along with the published paper).
+[[11]](#ref11), and this repository.
 
 Landsat data are courtesy of the U.S. Geological Survey and are in the public
 domain. Acknowledge them per the
 [USGS data citation policy](https://www.usgs.gov/centers/eros/data-citation).
 
-
+  
 ---
 
 ## Repository contents
