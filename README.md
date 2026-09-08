@@ -467,9 +467,6 @@ as a rough heterogeneity indicator only.
 
 ## 12. Methods
 
-A ready-to-use Methods section for a manuscript, with citations, is in
-[`docs/methods_section.tex`](docs/methods_section.tex) (BibTeX in
-`docs/references.bib`).
 
 ### Radiometric calibration
 
