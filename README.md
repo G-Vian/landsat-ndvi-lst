@@ -705,7 +705,18 @@ R package. https://CRAN.R-project.org/package=terra
 
 If this pipeline supports a publication, cite the Landsat datasets by DOI (see
 `docs/references.bib`), the ST algorithm [[6]](#ref6), the cloud mask
-[[11]](#ref11), and this repository.
+[[11]](#ref11), and this repository as:
+
+```
+@software{landsat-nvdi-lst,
+  author = {Vian, Gabriel},
+  title = {landsat-ndvi-lst},
+  year = {2026},
+  publisher = {GitHub},
+  journal = {GitHub repository},
+  howpublished = {\url{https://github.com/G-Vian/landsat-ndvi-lst/tree/main}} 
+}
+```
 
 Landsat data are courtesy of the U.S. Geological Survey and are in the public
 domain. Acknowledge them per the
