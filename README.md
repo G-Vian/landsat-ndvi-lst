@@ -701,7 +701,7 @@ R package. https://CRAN.R-project.org/package=terra
 
 ---
 
-## 18. Citation and  
+## 18. Citation and licence
 
 If this pipeline supports a publication, cite the Landsat datasets by DOI (see
 `docs/references.bib`), the ST algorithm [[6]](#ref6), the cloud mask
